@@ -9,6 +9,8 @@
 
 Simple React application (bootstrapped using [Create React App](https://github.com/facebook/create-react-app)) with the viewer embedded into it using a custom wrapper component.
 
+The original code was updated to use Functional components and hooks.
+
 ![thumbnail](thumbnail.png)
 
 ## Development
