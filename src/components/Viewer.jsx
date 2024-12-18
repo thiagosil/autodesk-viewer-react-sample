@@ -1,7 +1,6 @@
 /// import * as Autodesk from "@types/forge-viewer";
 
-import React from 'react';
-import PropTypes from 'prop-types';
+import React, { useEffect, useRef } from 'react';
 
 const { Autodesk } = window;
 
@@ -34,87 +33,191 @@ function initializeViewerRuntime(options) {
 /**
  * Wrapper for the Autodesk Platform Services viewer component.
  */
-class Viewer extends React.Component {
-    constructor(props) {
-        super(props);
-        /** @type {HTMLDivElement} */
-        this.container = null;
-        /** @type {Autodesk.Viewing.GuiViewer3D} */
-        this.viewer = null;
-    }
+const Viewer = React.forwardRef(({ runtime, urn, selectedIds, onCameraChange, onSelectionChange }, ref) => {
+    const viewerDiv = useRef(null);
+    const viewerInstance = useRef(null);
+    const initialized = useRef(false);
 
-    componentDidMount() {
-        initializeViewerRuntime(this.props.runtime || {})
-            .then(_ => {
-                this.viewer = new Autodesk.Viewing.GuiViewer3D(this.container);
-                this.viewer.start();
-                this.viewer.addEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, this.onViewerCameraChange);
-                this.viewer.addEventListener(Autodesk.Viewing.SELECTION_CHANGED_EVENT, this.onViewerSelectionChange);
-                this.updateViewerState({});
-            })
-            .catch(err => console.error(err));
-    }
+    // Initialize viewer
+    useEffect(() => {
+        if (initialized.current) return;
+        
+        console.log('Starting viewer initialization');
+        const options = {
+            env: 'AutodeskProduction',
+            api: 'derivativeV2',
+            useADP: false,
+            useCredentials: true,
+            accessToken: runtime.accessToken,
+            getAccessToken: (onGetAccessToken) => {
+                onGetAccessToken(runtime.accessToken, 3600);
+            }
+        };
 
-    componentWillUnmount() {
-        if (this.viewer) {
-            this.viewer.removeEventListener(Autodesk.Viewing.CAMERA_CHANGE_EVENT, this.onViewerCameraChange);
-            this.viewer.removeEventListener(Autodesk.Viewing.SELECTION_CHANGED_EVENT, this.onViewerSelectionChange);
-            this.viewer.finish();
-            this.viewer = null;
+        console.log('Initializing with token:', options.accessToken?.substring(0, 20) + '...');
+
+        if (!window.Autodesk) {
+            console.error('Autodesk Viewer library is not loaded');
+            return;
         }
-    }
 
-    componentDidUpdate(prevProps) {
-        if (this.viewer) {
-            this.updateViewerState(prevProps);
-        }
-    }
+        // Set endpoint for the Viewer
+        Autodesk.Viewing.endpoint.setEndpointAndApi(
+            'https://developer.api.autodesk.com',
+            'modelDerivativeV2'
+        );
 
-    updateViewerState(prevProps) {
-        if (this.props.urn && this.props.urn !== prevProps.urn) {
-            Autodesk.Viewing.Document.load(
-                'urn:' + this.props.urn,
-                (doc) => this.viewer.loadDocumentNode(doc, doc.getRoot().getDefaultGeometry()),
-                (code, message, errors) => console.error(code, message, errors)
+        initializeViewerRuntime(options).then(() => {
+            if (!viewerDiv.current || viewerInstance.current) return;
+
+            const viewer = new Autodesk.Viewing.GuiViewer3D(viewerDiv.current);
+            viewer.start();
+            viewerInstance.current = viewer;
+            initialized.current = true;
+
+            if (ref) {
+                ref.current = viewer;
+            }
+
+            viewer.addEventListener(
+                Autodesk.Viewing.CAMERA_CHANGE_EVENT,
+                onViewerCameraChange
             );
-        } else if (!this.props.urn && this.viewer.model) {
-            this.viewer.unloadModel(this.viewer.model);
+            viewer.addEventListener(
+                Autodesk.Viewing.SELECTION_CHANGED_EVENT,
+                onViewerSelectionChange
+            );
+
+            console.log('Viewer initialized successfully');
+            
+            if (urn) {
+                loadModel(urn);
+            }
+        }).catch(error => {
+            console.error('Error initializing viewer:', error);
+        });
+
+        return () => {
+            if (viewerInstance.current) {
+                console.log('Cleaning up viewer');
+                viewerInstance.current.removeEventListener(
+                    Autodesk.Viewing.CAMERA_CHANGE_EVENT,
+                    onViewerCameraChange
+                );
+                viewerInstance.current.removeEventListener(
+                    Autodesk.Viewing.SELECTION_CHANGED_EVENT,
+                    onViewerSelectionChange
+                );
+                viewerInstance.current.finish();
+                viewerInstance.current = null;
+                initialized.current = false;
+            }
+        };
+    }, [urn, runtime.accessToken]);
+
+    // Separate effect for handling runtime changes
+    useEffect(() => {
+        if (!viewerInstance.current || !initialized.current) return;
+        
+        // Update viewer with new runtime options if needed
+        // This depends on what properties in runtime need to be updated
+        // console.log('Runtime updated:', runtime);
+    }, [runtime]);
+
+    const loadModel = async (modelUrn) => {
+        if (!viewerInstance.current || !modelUrn) {
+            console.log('Cannot load model: viewer not ready or no URN provided');
+            return;
         }
 
-        const selectedIds = this.viewer.getSelection();
-        if (JSON.stringify(this.props.selectedIds || []) !== JSON.stringify(selectedIds)) {
-            this.viewer.select(this.props.selectedIds);
+        console.log('Loading model with URN:', modelUrn);
+        
+        try {
+            const cleanUrn = modelUrn.replace('urn:', '');
+            const urnWithPrefix = `urn:${cleanUrn}`;
+                
+            console.log('Loading document with URN:', urnWithPrefix);
+            
+            await new Promise((resolve, reject) => {
+                const onDocumentLoadSuccess = (doc) => {
+                    console.log('Document loaded successfully');
+                    const defaultModel = doc.getRoot().getDefaultGeometry();
+                    if (!defaultModel) {
+                        console.error('No default geometry found in document');
+                        reject(new Error('No default geometry'));
+                        return;
+                    }
+                    console.log('Loading default model view');
+                    viewerInstance.current.loadDocumentNode(doc, defaultModel);
+                    resolve();
+                };
+
+                const onDocumentLoadFailure = (code, message, errors) => {
+                    console.error('Document loading failed:', { code, message, errors });
+                    reject(new Error(message));
+                };
+
+                Autodesk.Viewing.Document.load(
+                    urnWithPrefix,
+                    onDocumentLoadSuccess,
+                    onDocumentLoadFailure
+                );
+            });
+        } catch (error) {
+            console.error('Error loading model:', error);
         }
-    }
+    };
 
-    onViewerCameraChange = () => {
-        if (this.props.onCameraChange) {
-            this.props.onCameraChange({ viewer: this.viewer, camera: this.viewer.getCamera() });
+    // Handle URN changes
+    useEffect(() => {
+        console.log('URN effect triggered with:', urn);
+        console.log('viewerInstance status:', !!viewerInstance.current);
+        
+        if (!viewerInstance.current || !initialized.current) {
+            console.log('Viewer not yet initialized');
+            return;
         }
-    }
 
-    onViewerSelectionChange = () => {
-        if (this.props.onSelectionChange) {
-            this.props.onSelectionChange({ viewer: this.viewer, ids: this.viewer.getSelection() });
+        if (urn) {
+            loadModel(urn);
+        } else if (viewerInstance.current.model) {
+            console.log('No URN provided, unloading current model');
+            viewerInstance.current.unloadModel(viewerInstance.current.model);
         }
-    }
+    }, [urn, initialized.current]);
 
-    render() {
-        return <div ref={ref => this.container = ref}></div>;
-    }
-}
+    // Handle selection changes
+    useEffect(() => {
+        if (!viewerInstance.current) return;
 
-Viewer.propTypes = {
-    /** Viewer runtime initialization options. */
-    runtime: PropTypes.object,
-    /** URN of model to be loaded. */
-    urn: PropTypes.string,
-    /** List of selected object IDs. */
-    selectedIds: PropTypes.arrayOf(PropTypes.number),
-    /** Callback for when the viewer camera changes. */
-    onCameraChange: PropTypes.func,
-    /** Callback for when the viewer selectio changes. */
-    onSelectionChange: PropTypes.func
-};
+        const currentSelection = viewerInstance.current.getSelection();
+        if (JSON.stringify(selectedIds || []) !== JSON.stringify(currentSelection)) {
+            viewerInstance.current.select(selectedIds);
+        }
+    }, [selectedIds]);
+
+    const onViewerCameraChange = () => {
+        if (onCameraChange && viewerInstance.current) {
+            onCameraChange({
+                viewer: viewerInstance.current,
+                camera: viewerInstance.current.getCamera()
+            });
+        }
+    };
+
+    const onViewerSelectionChange = () => {
+        if (onSelectionChange && viewerInstance.current) {
+            onSelectionChange({
+                viewer: viewerInstance.current,
+                ids: viewerInstance.current.getSelection()
+            });
+        }
+    };
+
+    return (
+        <div ref={viewerDiv} style={{ width: '100%', height: '100%' }} />
+    );
+});
+
 
 export default Viewer;

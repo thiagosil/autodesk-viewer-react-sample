@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './components/App';
 
-const APS_ACCESS_TOKEN = ''; // Specify your access token
+const APS_ACCESS_TOKEN = '';
 const APS_MODEL_URN = ''; // Specify your model URN
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
